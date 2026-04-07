@@ -1,0 +1,81 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: n9e-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: n9e@root2024
+      MYSQL_DATABASE: n9e
+      MYSQL_USER: n9e
+      MYSQL_PASSWORD: n9e@2024
+    volumes:
+      - n9e-mysql-data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "n9e", "-pn9e@2024"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: n9e-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nightingale:
+    image: flashcatcloud/nightingale:latest
+    container_name: n9e
+    restart: unless-stopped
+    command: ["/app/n9e", "-configs", "/app/etc"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "17000:17000"   # Web UI
+    volumes:
+      - ./etc:/app/etc   # 挂载本地配置目录
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:17000/api/n9e/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: n9e-prometheus
+    restart: unless-stopped
+    depends_on:
+      nightingale:
+        condition: service_started
+    ports:
+      - "19090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - n9e-prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-remote-write-receiver"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  n9e-mysql-data:
+  n9e-prom-data:
+

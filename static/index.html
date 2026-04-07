@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Oncall 排班平台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.3.4/dist/vue.global.prod.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.5.0/dist/axios.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Noto Sans SC"', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Smooth transitions */
+    * { transition-property: background-color, border-color, color, box-shadow, opacity; transition-duration: 150ms; }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    /* Glass card */
+    .glass { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    /* Subtle gradient bg */
+    body { background: linear-gradient(135deg, #f0f4ff 0%, #e8edf5 50%, #f5f0ff 100%); min-height: 100vh; }
+    /* Hover lift */
+    .card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 25px -5px rgb(0 0 0 / 0.08), 0 4px 10px -3px rgb(0 0 0 / 0.04); }
+    /* Nav pill active glow */
+    .nav-active { box-shadow: 0 0 0 1px rgba(59,130,246,0.3), 0 2px 8px rgba(59,130,246,0.15); }
+    /* Input focus ring */
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+    /* Button press */
+    button:active:not(:disabled) { transform: scale(0.98); }
+    /* Fade in animation */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    /* Modal backdrop */
+    .modal-backdrop { backdrop-filter: blur(4px); }
+    /* Full width sections */
+    #app > section { margin-left: -4px; margin-right: -4px; }
+    @media (min-width: 640px) {
+      #app > section { margin-left: -24px; margin-right: -24px; }
+    }
+  </style>
+</head>
+<body class="text-slate-800 antialiased">
+  <div id="app" class="w-full px-0 py-0 space-y-0">
+    <header class="bg-white/80 glass shadow-sm border border-white/60 p-6 px-4 sm:px-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 fade-in sticky top-0 z-40">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-500/25">O</div>
+        <div>
+          <h1 class="text-xl font-bold bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">Oncall 排班平台</h1>
+          <p class="text-xs text-slate-400 mt-0.5">排班 · 告警联动 · 值班通知 · 接入配置</p>
+        </div>
+      </div>
+      <div v-if="currentUser" class="flex flex-col lg:flex-row gap-3 lg:items-center">
+        <div class="flex items-center gap-2 text-sm">
+          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-semibold shadow">{{ (currentUser.full_name || 'U')[0] }}</div>
+          <div>
+            <span class="font-medium text-slate-700">{{ currentUser.full_name }}</span>
+            <span class="text-slate-400 ml-1 text-xs">{{ currentUser.username }}</span>
+          </div>
+          <span class="ml-1 px-2 py-0.5 rounded-full text-xs font-medium" :class="isAdmin ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200' : 'bg-slate-50 text-slate-500 ring-1 ring-slate-200'">{{ roleDisplayName }}</span>
+        </div>
+        <div class="flex gap-2">
+          <button v-if="isAdmin" @click="showAddUserModal = true" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 hover:border-slate-300">+ 人员</button>
+          <button v-if="isAdmin" @click="showAddScheduleModal = true" class="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-sm hover:bg-emerald-600 shadow-sm shadow-emerald-500/20">+ 排班</button>
+          <button @click="reloadAll" class="px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm hover:bg-blue-600 shadow-sm shadow-blue-500/20">↻ 刷新</button>
+          <button @click="logout" class="px-3 py-1.5 rounded-lg border border-rose-200 text-rose-500 text-sm hover:bg-rose-50">退出</button>
+        </div>
+      </div>
+    </header>
+
+    <section v-if="!authReady" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-10 text-center text-slate-400 fade-in">
+      <div class="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+      <div>正在校验登录状态...</div>
+    </section>
+
+    <section v-else-if="!currentUser" class="fade-in flex items-center justify-center min-h-[60vh]">
+      <div class="bg-white/90 glass rounded-2xl shadow-xl border border-white/60 p-8 w-full max-w-md">
+        <div class="text-center mb-8">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-2xl shadow-lg shadow-blue-500/25 mx-auto mb-4">O</div>
+          <h2 class="text-2xl font-bold text-slate-800">欢迎回来</h2>
+          <p class="text-sm text-slate-400 mt-2">登录 Oncall 排班平台</p>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label class="text-xs font-medium text-slate-500 mb-1 block">用户名 / 邮箱</label>
+            <input v-model="loginForm.username" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50 placeholder-slate-300" placeholder="请输入用户名">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-500 mb-1 block">密码</label>
+            <input v-model="loginForm.password" @keyup.enter="login" type="password" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50 placeholder-slate-300" placeholder="请输入密码">
+          </div>
+          <button @click="login" class="w-full px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-medium hover:from-blue-600 hover:to-indigo-700 shadow-lg shadow-blue-500/25 text-sm">登 录</button>
+        </div>
+        <div class="mt-6 text-center text-xs text-slate-300">
+          使用 init_data.py 初始化的测试账号可直接登录
+        </div>
+      </div>
+    </section>
+
+    <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-0 fade-in min-h-screen">
+      <aside class="lg:col-span-3 space-y-4 px-4 sm:px-6 py-6 sticky top-0 h-screen overflow-y-auto">
+
+
+
+
+        <div class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-5 space-y-4 flex flex-col h-full">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">导航</h2>
+          </div>
+
+          <nav class="space-y-1.5 flex-1">
+            <button
+              @click="activeFeature = 'schedule'; scheduleView = 'list'"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
+              :class="activeFeature === 'schedule' ? 'bg-blue-50 text-blue-700 nav-active' : 'text-slate-600 hover:bg-slate-50'"
+            ><span class="text-base">📅</span> 排班详情</button>
+            <button
+              v-if="isAdmin"
+              @click="activeFeature = 'users'"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
+              :class="activeFeature === 'users' ? 'bg-blue-50 text-blue-700 nav-active' : 'text-slate-600 hover:bg-slate-50'"
+            ><span class="text-base">👥</span> 人员管理</button>
+            <button
+              @click="openAlertsView"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
+              :class="activeFeature === 'alerts' ? 'bg-blue-50 text-blue-700 nav-active' : 'text-slate-600 hover:bg-slate-50'"
+            ><span class="text-base">🔔</span> 告警运营台</button>
+            <button
+              v-if="isAdmin"
+              @click="activeFeature = 'integrations'"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
+              :class="activeFeature === 'integrations' ? 'bg-blue-50 text-blue-700 nav-active' : 'text-slate-600 hover:bg-slate-50'"
+            ><span class="text-base">⚙️</span> 接入配置</button>
+          </nav>
+        </div>
+
+      </aside>
+
+      <main class="lg:col-span-9 space-y-6 px-4 sm:px-6 py-6">
+        <section v-if="activeFeature === 'schedule'" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-5">
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-xs font-medium text-slate-400 uppercase tracking-wider">当前排班表</div>
+              <div class="text-xl font-bold text-slate-800 truncate mt-1">{{ selectedSchedule?.name || '未选择' }}</div>
+              <div class="text-sm text-slate-400 truncate">{{ selectedSchedule?.description || '请先从列表中选择排班表' }}</div>
+            </div>
+            <div class="flex items-center gap-3">
+              <button
+                v-if="scheduleView === 'detail'"
+                @click="openScheduleList"
+                class="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+              >← 返回</button>
+              <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span class="text-sm font-medium text-emerald-700">{{ currentOncall?.user?.full_name || '暂无值班' }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="activeFeature === 'schedule' && scheduleView === 'list'" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-lg font-bold text-slate-800">排班表</h2>
+                <span v-if="!isAdmin" class="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-200 font-medium">仅我相关</span>
+              </div>
+              <p class="text-sm text-slate-400 mt-1">点击进入排班详情</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="canManageVisibleSchedules"
+                @click="toggleSelectAllSchedules"
+                class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50"
+              >{{ allVisibleSchedulesSelected ? '取消全选' : '全选' }}</button>
+              <button
+                v-if="selectedVisibleScheduleCount > 0"
+                @click="batchDeleteSchedules"
+                class="px-3 py-2 rounded-lg border border-red-200 text-red-700 text-sm hover:bg-red-50"
+              >批量删除（{{ selectedVisibleScheduleCount }}）</button>
+              <button @click="loadSchedules" class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">刷新</button>
+            </div>
+          </div>
+
+          <div v-if="selectedVisibleScheduleCount > 0" class="flex items-center gap-2 mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+            <span>已选 {{ selectedVisibleScheduleCount }} 个排班表</span>
+            <button @click="clearScheduleSelection" class="px-2 py-1 rounded border border-red-200 hover:bg-red-100">清空选择</button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+            <div
+              v-for="schedule in schedules"
+              :key="`detail-list-${schedule.id}`"
+              @click="openScheduleDetail(schedule.id)"
+              class="text-left rounded-2xl border border-slate-200/80 bg-white/70 p-5 hover:border-blue-300 hover:shadow-md card-hover transition-all cursor-pointer group"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-start gap-2 min-w-0">
+                  <input
+                    v-if="canManageSchedule(schedule)"
+                    type="checkbox"
+                    :checked="selectedScheduleIds.includes(scheduleIdKey(schedule.id))"
+                    @click.stop="toggleScheduleSelect(schedule.id)"
+                    class="mt-1"
+                  />
+                  <div class="min-w-0">
+                    <div class="font-semibold text-lg truncate">{{ schedule.name }}</div>
+                    <div class="text-sm text-slate-500 truncate mt-1">{{ schedule.description || '暂无描述' }}</div>
+                  </div>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full" :class="schedule.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
+                  {{ schedule.is_active ? '启用' : '停用' }}
+                </span>
+              </div>
+              <div class="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                <div>成员数：{{ schedule.member_count || 0 }}</div>
+                <div>开始：{{ formatDate(schedule.start_date) }}</div>
+                <div class="col-span-2">负责人：{{ schedule.owner_name || '-' }}</div>
+                <div class="col-span-2 break-all">CTI：{{ (schedule.cti_values || []).join(', ') || '-' }}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="activeFeature === 'users' && isAdmin" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-6">
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-bold text-slate-800">人员管理</h2>
+              <p class="text-sm text-slate-400 mt-1">新增 / 编辑 / 删除人员</p>
+            </div>
+            <div class="flex gap-2">
+              <input v-model="userSearch" class="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-slate-50/50 placeholder-slate-300" placeholder="🔍 搜索姓名/用户名/邮箱">
+              <button @click="openUserCreate" class="px-3 py-2 rounded-xl bg-blue-500 text-white text-sm hover:bg-blue-600 shadow-sm shadow-blue-500/20">+ 新增</button>
+              <button @click="loadUsers" class="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">↻</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 mt-6">
+            <div class="xl:col-span-7 rounded-xl border border-slate-200 overflow-x-auto overflow-y-hidden">
+              <table class="w-full min-w-[720px] table-auto text-sm">
+                <thead class="bg-slate-50/80 text-slate-500 text-xs uppercase tracking-wider">
+                  <tr>
+                    <th class="px-4 py-3 text-left">姓名</th>
+                    <th class="px-4 py-3 text-left">用户名</th>
+                    <th class="px-4 py-3 text-left">邮箱</th>
+                    <th class="px-4 py-3 text-left">手机号</th>
+                    <th class="px-4 py-3 text-left">团队</th>
+                    <th class="px-4 py-3 text-left">角色</th>
+                    <th class="px-4 py-3 text-left">状态</th>
+                    <th class="px-4 py-3 text-left whitespace-nowrap min-w-[96px]">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="u in filteredUsers" :key="u.id" class="border-t border-slate-100">
+                    <td class="px-4 py-3 font-medium">{{ u.full_name }}</td>
+                    <td class="px-4 py-3">{{ u.username }}</td>
+                    <td class="px-4 py-3">{{ u.email }}</td>
+                    <td class="px-4 py-3">{{ u.masked_phone || '-' }}</td>
+                    <td class="px-4 py-3">{{ u.team || '-' }}</td>
+                    <td class="px-4 py-3">{{ (u.role || 'operator') === 'admin' ? '管理员' : '普通用户' }}</td>
+                    <td class="px-4 py-3">
+                      <span class="text-xs px-2 py-1 rounded-full" :class="u.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
+                        {{ u.is_active ? '启用' : '停用' }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 space-x-3 whitespace-nowrap min-w-[96px]">
+                      <button @click="openUserEdit(u)" class="text-blue-600">编辑</button>
+                      <button @click="deleteUser(u)" class="text-red-600">删除</button>
+                    </td>
+                  </tr>
+                  <tr v-if="filteredUsers.length === 0">
+                    <td colspan="8" class="px-4 py-10 text-center text-slate-400">暂无人员</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- 人员管理右侧编辑表单 -->
+            <div class="xl:col-span-5 rounded-xl border border-slate-200 p-5">
+              <div class="font-semibold mb-3">{{ userForm.id ? '编辑人员' : '新增人员' }}</div>
+              <div class="space-y-3">
+                <input v-model="userForm.username" class="w-full border rounded-lg px-3 py-2" placeholder="用户名">
+                <input v-model="userForm.full_name" class="w-full border rounded-lg px-3 py-2" placeholder="姓名">
+                <input v-model="userForm.email" type="email" class="w-full border rounded-lg px-3 py-2" placeholder="邮箱">
+                <!-- 手机号：默认仅展示脱敏占位，需点击按钮才能解锁明文编辑 -->
+                <div class="flex gap-2">
+                  <input
+                    v-model="userForm.phone"
+                    class="w-full border rounded-lg px-3 py-2"
+                    :disabled="userForm.id && !phoneEditUnlocked"
+                    :placeholder="phoneEditUnlocked ? '手机号（可选）' : (userFormMaskedPhone || '已脱敏，点击下方按钮可编辑')"
+                  >
+                  <button
+                    v-if="userForm.id && !phoneEditUnlocked"
+                    type="button"
+                    @click="unlockPhoneEdit"
+                    class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50 whitespace-nowrap"
+                  >修改手机号</button>
+                </div>
+                <input v-model="userForm.team" class="w-full border rounded-lg px-3 py-2" placeholder="团队（可选）">
+                <select v-model="userForm.role" class="w-full border rounded-lg px-3 py-2">
+                  <option value="operator">普通用户（operator）</option>
+                  <option value="admin">管理员（admin）</option>
+                </select>
+                <input v-if="!userForm.id" v-model="userForm.password" type="password" class="w-full border rounded-lg px-3 py-2" placeholder="初始密码">
+                <div class="flex gap-2">
+                  <button @click="saveUser" class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">保存</button>
+                  <button @click="resetUserForm" class="px-4 py-2 rounded-lg border hover:bg-slate-50">清空</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="activeFeature === 'users' && !isAdmin" class="bg-white rounded-2xl shadow-sm p-6 text-sm text-slate-500">
+          当前账号为普通用户，仅管理员可访问人员管理。
+        </section>
+
+        <section v-if="selectedSchedule && activeFeature === 'schedule' && scheduleView === 'detail'" class="bg-white rounded-2xl shadow-sm p-6">
+          <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h2 class="text-3xl font-bold">{{ selectedSchedule.name }}</h2>
+              <p class="text-slate-500 mt-2">{{ selectedSchedule.description || '暂无描述' }}</p>
+              <div class="mt-3 flex flex-wrap gap-2 items-center">
+                <span class="text-xs px-2 py-1 rounded-full" :class="selectedSchedule.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
+                  {{ selectedSchedule.is_active ? '启用中' : '已停用' }}
+                </span>
+                <button
+                  v-if="canManageSelectedSchedule"
+                  @click="toggleScheduleActive"
+                  class="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-50"
+                >{{ selectedSchedule.is_active ? '停用' : '启用' }}</button>
+                <button
+                  v-if="canManageSelectedSchedule"
+                  @click="deleteSchedule"
+                  class="px-3 py-1.5 rounded-lg border border-red-200 text-sm text-red-700 hover:bg-red-50"
+                >删除</button>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="changeMonth(-1)" class="px-3 py-2 border rounded-lg hover:bg-slate-50">上月</button>
+              <div class="px-4 py-2 border rounded-lg min-w-[120px] text-center">{{ monthTitle }}</div>
+              <button @click="changeMonth(1)" class="px-3 py-2 border rounded-lg hover:bg-slate-50">下月</button>
+            </div>
+          </div>
+
+          <div class="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 text-sm">
+            <div class="rounded-xl bg-slate-50 p-4">
+              <div class="text-slate-500">负责人</div>
+              <div class="font-semibold mt-1">{{ scheduleOwnerName }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4">
+              <div class="text-slate-500">开始日期</div>
+              <div class="font-semibold mt-1">{{ formatDate(selectedSchedule.start_date) }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4">
+              <div class="text-slate-500">交班时间</div>
+              <div class="font-semibold mt-1">{{ selectedSchedule.handover_hour ?? 9 }} 点</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4">
+              <div class="text-slate-500">当前值班</div>
+              <div class="font-semibold mt-1">{{ currentOncall?.user?.full_name || '暂无' }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-slate-500">CTI 标签</div>
+                <button
+                  v-if="canManageSelectedSchedule && scheduleCtiValues.length === 0"
+                  @click="generateScheduleCti"
+                  :disabled="generatingCti"
+                  class="px-2 py-1 rounded border text-xs hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >{{ generatingCti ? '生成中...' : '手动生成' }}</button>
+              </div>
+              <div class="font-semibold mt-1 break-all">{{ scheduleCtiValues.join(', ') || '自动生成中' }}</div>
+            </div>
+          </div>
+
+          <div class="mt-4 rounded-xl border border-slate-200 p-4" v-if="canManageSelectedSchedule">
+            <div class="text-sm text-slate-600 mb-2">排班负责人</div>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <select v-model.number="selectedSchedule.owner_id" class="w-full border rounded-lg px-3 py-2">
+                <option :value="null">未设置负责人</option>
+                <option v-for="user in users" :key="`owner-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+              </select>
+              <button @click="saveScheduleOwner" class="px-4 py-2 rounded-lg border hover:bg-slate-50">保存负责人</button>
+              <button @click="sendTodayReminder" class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">立即发送今日值班</button>
+            </div>
+          </div>
+
+          <div class="mt-6">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-sm text-slate-500">排班组（每行主备）</div>
+              <button v-if="canManageSelectedSchedule" @click="openGroupModal" class="px-3 py-1.5 rounded-lg border text-sm hover:bg-slate-50">编辑排班组</button>
+            </div>
+            <div class="space-y-2">
+              <div
+                v-for="(row, idx) in memberGroupRows"
+                :key="`member-row-${idx}`"
+                class="rounded-lg p-3 border-l-4"
+                :class="idx % 2 === 0 ? 'bg-emerald-50 border-emerald-500' : 'bg-rose-50 border-rose-500'"
+              >
+                <div class="flex flex-wrap gap-2 text-sm">
+                  <span class="px-2 py-0.5 rounded bg-white border text-slate-600">主：{{ row.primary || '-' }}</span>
+                  <span class="px-2 py-0.5 rounded bg-white border text-slate-600">备：{{ row.secondary || '-' }}</span>
+                </div>
+              </div>
+              <div v-if="memberGroupRows.length === 0" class="text-sm text-slate-400">暂无排班组</div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="selectedSchedule && activeFeature === 'schedule' && scheduleView === 'detail'" class="bg-white rounded-2xl shadow-sm p-6">
+          <div class="flex items-center justify-between border-b pb-3">
+            <div class="flex gap-6">
+              <button @click="activeTab = 'calendar'" class="pb-2 font-medium" :class="activeTab === 'calendar' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'">排班日历</button>
+              <button @click="activeTab = 'special'" class="pb-2 font-medium" :class="activeTab === 'special' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'">特殊排班</button>
+            </div>
+            <div v-if="activeTab === 'special' && canManageSelectedSchedule" class="flex gap-2">
+              <button @click="resetForm" class="px-3 py-2 rounded-lg border hover:bg-slate-50">新建特殊排班</button>
+              <button @click="openImportExample" class="px-3 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">批量导入</button>
+            </div>
+          </div>
+
+          <div v-if="loading" class="py-16 text-center text-slate-400">正在加载...</div>
+
+          <template v-else-if="activeTab === 'calendar'">
+            <div class="grid grid-cols-7 mt-5 border border-slate-200 rounded-xl overflow-hidden text-center text-sm font-medium text-slate-500 bg-slate-50">
+              <div v-for="day in weekdays" :key="day" class="py-3 border-r last:border-r-0">{{ day }}</div>
+            </div>
+            <div class="grid grid-cols-7 border-l border-r border-b border-slate-200 rounded-b-xl overflow-hidden">
+              <div
+                v-for="cell in calendarCells"
+                :key="cell.key"
+                class="min-h-[170px] border-r border-b p-2 align-top"
+                :class="cell.currentMonth ? 'bg-white' : 'bg-slate-50 text-slate-300'"
+              >
+                <div class="flex items-center justify-between mb-2">
+                  <span class="font-medium">{{ cell.day }}</span>
+                  <span v-if="cell.specials.length" class="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">特殊 {{ cell.specials.length }}</span>
+                </div>
+
+                <template v-if="cell.currentMonth">
+                  <div class="space-y-2">
+                    <div class="rounded-lg bg-emerald-50 border-l-4 border-emerald-500 p-2">
+                      <div class="text-[11px] text-slate-500 mb-1">24 小时值班</div>
+                      <div class="text-xs">主：{{ cell.assignments.full_day.primary || '-' }}</div>
+                      <div class="text-xs">副：{{ cell.assignments.full_day.secondary || '-' }}</div>
+                    </div>
+                    <div v-if="cell.specials.length" class="rounded-lg bg-amber-50 border border-amber-200 p-2">
+                      <div class="text-[11px] text-amber-700 mb-1">特殊排班</div>
+                      <div v-for="special in cell.specials" :key="special.id" class="text-xs flex items-center justify-between gap-2">
+                        <span>{{ shiftLabel(special.shift_type, special.role) }} · {{ special.user?.full_name || special.user_id }}</span>
+                        <button v-if="canManageSelectedSchedule" @click="editRow(special); activeTab = 'special'" class="text-blue-600">编辑</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="grid grid-cols-1 xl:grid-cols-5 gap-6 mt-5">
+              <div class="xl:col-span-2 space-y-5">
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <div class="font-semibold mb-3">{{ form.id ? '编辑特殊排班' : '新建特殊排班' }}</div>
+                  <div class="space-y-3">
+                    <input type="date" v-model="form.shift_date" class="w-full border rounded-lg px-3 py-2">
+                    <div>
+                      <select v-model="form.role" class="w-full border rounded-lg px-3 py-2">
+                        <option value="primary">主值班</option>
+                        <option value="secondary">副值班</option>
+                      </select>
+                    </div>
+                    <select v-model.number="form.user_id" class="w-full border rounded-lg px-3 py-2">
+                      <option :value="null">选择值班人</option>
+                      <option v-for="user in scheduleUsers" :key="user.id" :value="user.id">{{ user.full_name }}</option>
+                    </select>
+                    <textarea v-model="form.notes" rows="3" class="w-full border rounded-lg px-3 py-2" placeholder="备注（可选）"></textarea>
+                    <div class="flex gap-2">
+                      <button v-if="canManageSelectedSchedule" @click="saveSpecialShift" class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">{{ form.id ? '更新' : '创建' }}</button>
+                      <button @click="resetForm" class="px-4 py-2 rounded-lg border hover:bg-slate-50">清空</button>
+                    </div>
+                    <div v-if="!canManageSelectedSchedule" class="text-xs text-slate-400">当前账号仅可管理自己相关的排班表。</div>
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <div class="font-semibold mb-3">批量导入</div>
+                  <textarea v-model="importText" rows="10" class="w-full border rounded-lg px-3 py-2 font-mono text-sm"></textarea>
+                  <label class="mt-3 flex items-center text-sm text-slate-600">
+                    <input type="checkbox" v-model="overwrite" class="mr-2">覆盖同槽位已有特殊排班
+                  </label>
+                  <div class="mt-3 flex gap-2" v-if="canManageSelectedSchedule">
+                    <button @click="bulkImport" class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">执行导入</button>
+                    <button @click="openImportExample" class="px-4 py-2 rounded-lg border hover:bg-slate-50">示例</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="xl:col-span-3 rounded-xl border border-slate-200 overflow-hidden">
+                <table class="w-full text-sm">
+                  <thead class="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th class="px-4 py-3 text-left">日期</th>
+                      <th class="px-4 py-3 text-left">班次</th>
+                      <th class="px-4 py-3 text-left">角色</th>
+                      <th class="px-4 py-3 text-left">值班人</th>
+                      <th class="px-4 py-3 text-left">备注</th>
+                      <th class="px-4 py-3 text-left">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in specialRows" :key="row.id" class="border-t border-slate-100">
+                      <td class="px-4 py-3">{{ row.shift_date }}</td>
+                      <td class="px-4 py-3">24 小时</td>
+                      <td class="px-4 py-3">{{ row.role === 'primary' ? '主值班' : '副值班' }}</td>
+                      <td class="px-4 py-3">{{ row.user?.full_name || row.user_id }}</td>
+                      <td class="px-4 py-3">{{ row.notes || '-' }}</td>
+                      <td class="px-4 py-3 space-x-3">
+                        <button v-if="canManageSelectedSchedule" @click="editRow(row)" class="text-blue-600">编辑</button>
+                        <button v-if="canManageSelectedSchedule" @click="deleteRow(row)" class="text-red-600">删除</button>
+                      </td>
+                    </tr>
+                    <tr v-if="specialRows.length === 0">
+                      <td colspan="6" class="px-4 py-8 text-center text-slate-400">当前月份暂无特殊排班</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <section v-if="activeFeature === 'alerts'" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-6">
+          <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h3 class="text-lg font-bold text-slate-800">🔔 告警运营台 · {{ alertPanelTitle }}</h3>
+              <p class="text-sm text-slate-400 mt-1">{{ alertPanelDescription }}</p>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center justify-end">
+              <div class="text-xs text-slate-500">下次刷新: {{ refreshCountdown }}s</div>
+              <select v-model="alertScope" @change="loadAlertDataFromFirstPage" class="border rounded-lg px-3 py-2 text-sm">
+                <option value="mine">我的相关告警</option>
+                <option value="all">全部告警</option>
+              </select>
+              <input v-model.trim="incidentKeyword" @keyup.enter="loadAlertDataFromFirstPage" class="border rounded-lg px-3 py-2 text-sm min-w-[220px]" placeholder="搜索 ID / 标题 / 指纹 / 来源">
+              <select v-model="incidentStatusFilter" @change="loadAlertDataFromFirstPage" class="border rounded-lg px-3 py-2 text-sm">
+                <option value="open">未关闭</option>
+                <option value="acknowledged">已认领</option>
+                <option value="resolved">已关闭</option>
+                <option value="all">全部</option>
+              </select>
+              <button @click="loadAlertDataFromFirstPage" class="px-3 py-2 rounded-lg border hover:bg-slate-50 text-sm">🔄 刷新</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+            <div class="rounded-lg bg-rose-50 border border-rose-200 p-3">
+              <div class="text-xs text-rose-600 font-medium">未关闭</div>
+              <div class="text-2xl font-bold text-rose-700 mt-1">{{ incidentStats.open }}</div>
+            </div>
+            <div class="rounded-lg bg-amber-50 border border-amber-200 p-3">
+              <div class="text-xs text-amber-600 font-medium">已认领</div>
+              <div class="text-2xl font-bold text-amber-700 mt-1">{{ incidentStats.acknowledged }}</div>
+            </div>
+            <div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+              <div class="text-xs text-emerald-600 font-medium">已关闭</div>
+              <div class="text-2xl font-bold text-emerald-700 mt-1">{{ incidentStats.resolved }}</div>
+            </div>
+            <div class="rounded-lg bg-blue-50 border border-blue-200 p-3">
+              <div class="text-xs text-blue-600 font-medium">总计</div>
+              <div class="text-2xl font-bold text-blue-700 mt-1">{{ incidents.length }}</div>
+            </div>
+          </div>
+
+          <div v-if="selectedIncidents.length > 0" class="flex gap-2 mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+            <span class="text-sm text-blue-700">已选 {{ selectedIncidents.length }} 条</span>
+            <button @click="batchAckSelected" class="px-3 py-1 text-sm rounded border border-blue-300 hover:bg-blue-100">批量认领</button>
+            <button @click="batchResolveSelected" class="px-3 py-1 text-sm rounded border border-blue-300 hover:bg-blue-100">批量关闭</button>
+            <button @click="clearIncidentSelection" class="px-3 py-1 text-sm rounded border border-slate-300 hover:bg-slate-100 ml-auto">清除选择</button>
+          </div>
+
+          <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 mt-6">
+            <div class="xl:col-span-4 rounded-xl border border-slate-200 p-4">
+              <div class="flex items-center justify-between mb-3">
+                <div>
+                  <div class="font-semibold">Incident 列表</div>
+                  <div class="text-xs text-slate-500 mt-1">第 {{ incidentPage }} 页 · 每页 {{ incidentPageSize }} 条 · 当前页 {{ incidents.length }} 条 · 已选 {{ selectedVisibleIncidentCount }} 条</div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button @click="toggleSelectAllIncidents" class="px-2.5 py-1.5 text-xs rounded border hover:bg-slate-50">
+                    {{ allVisibleIncidentsSelected ? '取消全选' : '全选' }}
+                  </button>
+                  <button v-if="selectedVisibleIncidentCount > 0" @click="clearIncidentSelection" class="px-2.5 py-1.5 text-xs rounded border hover:bg-slate-50">清空</button>
+                </div>
+              </div>
+              <div class="flex items-center justify-between gap-2 mb-3 text-xs text-slate-500">
+                <div>按 ID 倒序（最新在上）</div>
+                <div class="flex items-center gap-2">
+                  <select
+                    :value="incidentPageSize"
+                    @change="setIncidentPageSize($event.target.value)"
+                    class="px-2 py-1 rounded border bg-white text-xs"
+                  >
+                    <option :value="20">20 / 页</option>
+                    <option :value="50">50 / 页</option>
+                    <option :value="100">100 / 页</option>
+                  </select>
+                  <button @click="changeIncidentPage(-1)" :disabled="incidentPage <= 1" class="px-2 py-1 rounded border hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">上一页</button>
+                  <button @click="changeIncidentPage(1)" :disabled="!hasNextIncidentPage" class="px-2 py-1 rounded border hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">下一页</button>
+                </div>
+              </div>
+              <div class="space-y-2 max-h-[68vh] overflow-y-auto pr-1">
+                <div
+                  v-for="incident in incidents"
+                  :key="incident.id"
+                  class="rounded-xl border p-3 transition cursor-pointer hover:shadow-md"
+                  :class="selectedIncidentId === incident.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200'"
+                  @click="selectIncident(incident.id)"
+                >
+                  <div class="flex gap-2 items-start">
+                    <input
+                      type="checkbox"
+                      :checked="selectedIncidents.includes(incidentIdKey(incident.id))"
+                      @click.stop="toggleIncidentSelect(incident.id)"
+                      class="mt-1"
+                    />
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center justify-between gap-1 text-xs mb-1">
+                        <span class="px-2 py-0.5 rounded-full" :class="incidentStatusClass(incident.status)">{{ statusText(incident.status) }}</span>
+                        <span class="px-2 py-0.5 rounded-full text-xs font-medium" :class="severityClass(incident.severity)">{{ (incident.severity || 'unknown').toUpperCase() }}</span>
+                        <span class="text-slate-500 ml-auto text-xs">{{ timeSinceCreated(incident.created_at) }}</span>
+                      </div>
+                      <div class="font-semibold text-sm line-clamp-2">#{{ incident.id }} {{ incident.title }}</div>
+                      <div class="text-xs text-slate-600 mt-1">负责人：{{ incident.assigned_user?.full_name || '未匹配' }}</div>
+                      <div class="text-xs text-slate-500 mt-1">{{ incident.schedule_name || '未关联排班' }} · {{ incident.event_count || 0 }} 事件 · {{ incident.notification_count || 0 }} 通知</div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="incidents.length === 0" class="text-sm text-slate-400 py-10 text-center">当前筛选下暂无 incident</div>
+              </div>
+            </div>
+
+            <div class="xl:col-span-8 rounded-xl border border-slate-200 p-4">
+              <div v-if="selectedIncident">
+                <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                  <div>
+                    <div class="flex flex-wrap gap-2 items-center">
+                      <h4 class="text-xl font-semibold">#{{ selectedIncident.id }} {{ selectedIncident.title }}</h4>
+                      <span class="px-2 py-1 rounded-full text-xs" :class="incidentStatusClass(selectedIncident.status)">{{ statusText(selectedIncident.status) }}</span>
+                      <span class="px-2 py-1 rounded-full text-xs" :class="severityClass(selectedIncident.severity)">{{ (selectedIncident.severity || 'unknown').toUpperCase() }}</span>
+                    </div>
+                    <p class="text-sm text-slate-500 mt-2">{{ selectedIncident.summary || '暂无摘要' }}</p>
+                    <p class="text-xs text-slate-400 mt-2">排班：{{ selectedIncident.schedule_name || selectedIncident.schedule?.name || '-' }} · 来源：{{ selectedIncident.source_name || '-' }}</p>
+                  </div>
+                  <div class="flex gap-2">
+                    <button
+                      @click="ackIncident"
+                      :disabled="selectedIncident.status === 'resolved'"
+                      class="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+                    >认领</button>
+                    <button @click="resolveIncident" :disabled="selectedIncident.status === 'resolved'" class="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-700">关闭</button>
+                    <button
+                      @click="resendLarkTicket"
+                      :disabled="resendingLark"
+                      class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      title="手动重新发送 Lark Ticket 告警卡片"
+                    >
+                      <span v-if="resendingLark">发送中…</span>
+                      <span v-else>📨 重发 Lark</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-4">
+                    <div class="text-slate-500">已匹配值班人</div>
+                    <div class="font-semibold mt-1">{{ selectedIncident.assigned_user?.full_name || '未匹配' }}</div>
+                    <div class="text-xs text-slate-500 mt-1">{{ selectedIncident.assigned_shift_kind || '-' }} / {{ selectedIncident.assigned_role || '-' }}</div>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-4">
+                    <div class="text-slate-500">当前 oncall 快照</div>
+                    <div class="font-semibold mt-1">{{ selectedIncident.current_oncall?.user?.full_name || currentOncall?.user?.full_name || '暂无' }}</div>
+                    <div class="text-xs text-slate-500 mt-1">{{ selectedIncident.current_oncall?.shift_kind || '-' }} / {{ selectedIncident.current_oncall?.role || '-' }}</div>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-4">
+                    <div class="text-slate-500">排班覆盖信息</div>
+                    <div class="font-semibold mt-1">{{ coverageSummary(selectedIncident.schedule_coverage) }}</div>
+                    <div class="text-xs text-slate-500 mt-1">覆盖日期：{{ selectedIncident.schedule_coverage?.date || '-' }}</div>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-4">
+                    <div class="text-slate-500">Hash / 来源</div>
+                    <div class="font-semibold mt-1 break-all">{{ selectedIncident.hash || selectedIncident.fingerprint }}</div>
+                    <div class="text-xs text-slate-500 mt-1">{{ selectedIncident.source_name || '-' }}</div>
+                  </div>
+                </div>
+
+                <div class="mt-6">
+                  <div class="flex items-center justify-between mb-3">
+                    <div class="font-semibold">📋 事件时间线</div>
+                    <div class="text-xs text-slate-500">
+                      <span v-if="selectedIncident.created_at">创建: {{ formatDateTime(selectedIncident.created_at) }}</span>
+                      <span v-if="selectedIncident.acknowledged_at" class="ml-2">认领: {{ minutesSince(selectedIncident.acknowledged_at) }}</span>
+                    </div>
+                  </div>
+                  <div class="space-y-3 max-h-[48vh] overflow-y-auto pr-1">
+                    <div
+                      v-for="item in incidentTimeline"
+                      :key="item.key"
+                      class="rounded-lg border p-3"
+                      :class="getTimelineItemClass(item)"
+                    >
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="flex-1">
+                          <div class="flex items-center gap-2">
+                            <span class="font-medium text-sm">{{ item.title }}</span>
+                            <span v-if="item.milestone" class="px-1.5 py-0.5 text-xs rounded-full font-medium" :class="getTimelineMilestoneClass(item)">{{ item.milestone }}</span>
+                          </div>
+                          <div class="text-xs text-slate-500 mt-1">{{ item.subtitle }}</div>
+                        </div>
+                        <div class="text-xs text-slate-500 whitespace-nowrap">{{ formatDateTime(item.time) }}</div>
+                      </div>
+                      <div v-if="item.content" class="text-sm mt-2 whitespace-pre-wrap break-words text-slate-700">{{ item.content }}</div>
+                    </div>
+                    <div v-if="incidentTimeline.length === 0" class="text-sm text-slate-400">暂无时间线</div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="h-full flex items-center justify-center text-sm text-slate-400 min-h-[240px]">
+                请先从左侧选择一个 incident。
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <section v-if="activeFeature === 'integrations' && isAdmin" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-6">
+          <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h3 class="text-lg font-bold text-slate-800">⚙️ 接入配置</h3>
+              <p class="text-sm text-slate-400 mt-1">统一维护 Lark 应用、Nightingale Webhook 认证和各排班策略</p>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center justify-end">
+              <select
+                :value="selectedScheduleId ?? ''"
+                @change="handleIntegrationScheduleChange($event)"
+                class="border rounded-lg px-3 py-2 text-sm min-w-[220px]"
+              >
+                <option value="">选择排班表</option>
+                <option
+                  v-for="schedule in schedules"
+                  :key="`integration-schedule-${schedule.id}`"
+                  :value="String(schedule.id)"
+                >
+                  {{ schedule.name }}
+                </option>
+              </select>
+              <button @click="loadAlertData(false)" class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">刷新接入数据</button>
+            </div>
+          </div>
+
+          <div class="mt-6 rounded-xl border border-slate-200 p-4">
+            <div class="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <div class="font-semibold">统一 Lark 应用配置</div>
+                <div class="text-sm text-slate-500 mt-1">所有排班共用一个 Lark 应用；发送群消息时会尝试根据值班人邮箱查询 open_id 并 @ 提醒。</div>
+              </div>
+              <button @click="saveLarkAppConfig" class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">保存 Lark 应用</button>
+            </div>
+            <div class="space-y-3">
+              <label class="flex items-center text-sm text-slate-700">
+                <input type="checkbox" v-model="larkAppConfig.enabled" class="mr-2">启用统一 Lark 应用
+              </label>
+              <input v-model="larkAppConfig.app_id" class="w-full border rounded-lg px-3 py-2" placeholder="Lark app_id">
+              <input v-model="larkAppConfig.app_secret" type="password" class="w-full border rounded-lg px-3 py-2" placeholder="Lark app_secret / app key">
+            </div>
+          </div>
+
+          <div class="mt-6 rounded-xl border border-slate-200 p-4">
+            <div class="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <div class="font-semibold">Nightingale Webhook 认证</div>
+                <div class="text-sm text-slate-500 mt-1">生成 Token 后，将带 <code class="text-xs bg-slate-100 px-1 rounded">?token=</code> 的 URL 粘贴到 Nightingale 回调即可，无需填写用户名密码。</div>
+              </div>
+              <div class="flex gap-2">
+                <button @click="loadNightingaleWebhookAuth()" class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50" :disabled="nightingaleLoading">刷新状态</button>
+                <button @click="disableNightingaleWebhookAuth" class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50" :disabled="nightingaleLoading">禁用认证</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm mb-3">
+              <div>状态：<span :class="nightingaleAuth.enabled ? 'text-emerald-600' : 'text-slate-500'">{{ nightingaleAuth.enabled ? '✅ 已启用' : '未启用' }}</span></div>
+              <div>Token：<span class="font-medium">{{ nightingaleAuth.has_password ? '已生成' : '未生成' }}</span></div>
+              <div>更新时间：<span class="font-medium">{{ formatDateTime(nightingaleAuth.updated_at) }}</span></div>
+            </div>
+
+            <div class="flex flex-col md:flex-row gap-2">
+              <button @click="generateNightingaleWebhookAuth" class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700" :disabled="nightingaleLoading">生成 / 轮换 Token</button>
+            </div>
+
+            <div v-if="nightingaleGeneratedPassword" class="mt-3 rounded-lg border border-green-300 bg-green-50 p-3 text-sm">
+              <!-- Webhook URL — primary display -->
+              <div v-if="nightingaleWebhookUrl">
+                <div class="font-medium text-green-800">🔗 Webhook URL（直接粘贴到 Nightingale 回调 URL 字段，用户名密码留空）</div>
+                <div class="mt-2 flex items-center gap-2 rounded bg-white border border-green-400 px-3 py-2">
+                  <span class="flex-1 break-all font-mono text-xs text-green-900 select-all">{{ nightingaleWebhookUrl }}</span>
+                  <button @click="copyNightingaleWebhookUrl" class="shrink-0 px-3 py-1 rounded bg-green-600 text-white text-sm hover:bg-green-700">📋 复制 URL</button>
+                </div>
+              </div>
+
+              <!-- Token (collapsible) -->
+              <details class="mt-3">
+                <summary class="cursor-pointer text-amber-800 font-medium text-sm">🔑 查看 Token 明文（高级）</summary>
+                <div class="mt-1 flex items-center gap-2 rounded bg-white border border-amber-300 px-3 py-2">
+                  <span class="flex-1 break-all font-mono text-sm text-amber-900 select-all">{{ nightingalePasswordVisible ? nightingaleGeneratedPassword : maskSecret(nightingaleGeneratedPassword) }}</span>
+                  <button @click="toggleNightingalePasswordVisible" class="shrink-0 px-2 py-1 rounded border border-amber-400 text-amber-800 text-xs hover:bg-amber-100">{{ nightingalePasswordVisible ? '隐藏' : '👁 显示' }}</button>
+                  <button @click="copyNightingalePassword" class="shrink-0 px-2 py-1 rounded bg-amber-500 text-white text-xs hover:bg-amber-600">📋 复制</button>
+                </div>
+              </details>
+
+              <div class="mt-3 flex">
+                <button @click="dismissNightingalePassword" class="px-3 py-1 rounded border border-green-400 text-green-800 hover:bg-green-100 text-sm">✅ 已复制，关闭</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="selectedSchedule" class="grid grid-cols-1 xl:grid-cols-12 gap-6 mt-6">
+            <div class="xl:col-span-4 rounded-xl border border-slate-200 p-4">
+              <div class="flex items-center justify-between mb-3">
+                <div class="font-semibold">接入源</div>
+                <div class="text-xs text-slate-500">{{ integrations.length }} 个</div>
+              </div>
+              <div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1" v-if="integrations.length">
+                <button
+                  v-for="source in integrations"
+                  :key="`integration-only-${source.id}`"
+                  @click="useIntegration(source)"
+                  class="w-full text-left rounded-lg border px-3 py-2 text-sm hover:bg-slate-50"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-medium">{{ source.name }}</span>
+                    <span class="text-xs text-slate-500">{{ source.open_incident_count || 0 }} open</span>
+                  </div>
+                  <div class="text-xs text-slate-500 mt-1 break-all">{{ source.source_key }}</div>
+                </button>
+              </div>
+              <div v-else class="text-sm text-slate-400">暂无接入源，保存配置后会自动创建默认接入。</div>
+            </div>
+
+            <div class="xl:col-span-8 space-y-5">
+              <div class="rounded-xl border border-slate-200 p-4">
+                <div class="font-semibold mb-3">当前排班接入与策略配置</div>
+                <div class="space-y-3">
+                  <input v-model="integrationForm.source_key" class="w-full border rounded-lg px-3 py-2" placeholder="source_key，如 monitor-prod-api">
+                  <input v-model="integrationForm.name" class="w-full border rounded-lg px-3 py-2" placeholder="接入名称">
+                  <textarea v-model="integrationForm.description" rows="3" class="w-full border rounded-lg px-3 py-2" placeholder="描述（可选）"></textarea>
+                  <div class="rounded-lg bg-slate-50 p-3 space-y-2">
+                    <div class="text-sm font-medium">排班表通知渠道</div>
+                    <label class="flex items-center text-sm text-slate-700">
+                      <input type="checkbox" v-model="scheduleIntegration.lark_enabled" class="mr-2">启用 Lark 应用群通知
+                    </label>
+                    <input v-model="scheduleIntegration.lark_chat_id" class="w-full border rounded-lg px-3 py-2" placeholder="当前排班 Lark 群 chat_id">
+                    <input v-model="scheduleIntegration.cti_values_text" class="w-full border rounded-lg px-3 py-2" placeholder="CTI 标签值(逗号分隔)，如 sre-core, oncall-tc">
+                    <div class="text-xs text-slate-500">同一个 Lark 应用可以服务所有排班；这里只需要填写当前排班对应的群 chat_id。每天 9:00 会按排班向该群发送“今天值班”播报（包含负责人 + 主备值班）。</div>
+                    <div class="text-xs text-slate-500">Nightingale 回调建议使用 <code>/open-api/events</code>，系统会按 payload 里的 cti 标签命中这里配置的 CTI 值并路由到对应排班。</div>
+                    <div class="text-sm font-medium mt-2">升级策略</div>
+                    <label class="flex items-center text-sm text-slate-700">
+                      <input type="checkbox" v-model="scheduleIntegration.escalation_enabled" class="mr-2">1小时未处理升级手机告警
+                    </label>
+                    <input v-model.number="scheduleIntegration.escalation_after_minutes" type="number" min="1" class="w-full border rounded-lg px-3 py-2" placeholder="升级分钟数（默认60）">
+                    <label class="flex items-center text-sm text-slate-700 mt-2">
+                      <input type="checkbox" v-model="scheduleIntegration.ack_escalation_enabled" class="mr-2">15分钟未 ACK 通知今日全部值班
+                    </label>
+                    <input v-model.number="scheduleIntegration.ack_escalation_after_minutes" type="number" min="1" class="w-full border rounded-lg px-3 py-2" placeholder="未 ACK 升级分钟数（默认15）">
+                    <label class="flex items-center text-sm text-slate-700">
+                      <input type="checkbox" v-model="scheduleIntegration.notify_all_oncall_on_ack_timeout" class="mr-2">未 ACK 时通知今日值班全员
+                    </label>
+                    <label class="flex items-center text-sm text-slate-700 mt-2">
+                      <input type="checkbox" v-model="scheduleIntegration.important_direct_phone" class="mr-2">重要告警直接电话（critical 或 payload.important=true）
+                    </label>
+                    <input v-model="scheduleIntegration.huawei_phone_api_url" class="w-full border rounded-lg px-3 py-2" placeholder="手机告警 API URL（占位）">
+                    <input v-model="scheduleIntegration.huawei_target_phones_text" class="w-full border rounded-lg px-3 py-2" placeholder="电话目标手机号(逗号分隔)，如 138xxx,139yyy">
+                  </div>
+                  <button @click="saveScheduleIntegration" class="w-full px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">保存到排班表配置</button>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 p-4">
+                <div class="font-semibold mb-3">测试触发</div>
+                <div class="space-y-3">
+                  <input v-model="testEvent.hash" class="w-full border rounded-lg px-3 py-2" placeholder="hash（兼容 fingerprint），如 9f3cddc3d91aa2090db9a6608b56b802">
+                  <input v-model="testEvent.title" class="w-full border rounded-lg px-3 py-2" placeholder="事件标题">
+                  <textarea v-model="testEvent.summary" rows="3" class="w-full border rounded-lg px-3 py-2" placeholder="事件摘要（可选）"></textarea>
+                  <select v-model="testEvent.severity" class="w-full border rounded-lg px-3 py-2">
+                    <option value="critical">critical</option>
+                    <option value="warning">warning</option>
+                    <option value="info">info</option>
+                  </select>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button @click="triggerTestEvent('triggered')" class="px-4 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-700">触发告警</button>
+                    <button @click="triggerTestEvent('resolved')" class="px-4 py-2 rounded-lg border hover:bg-slate-50">发送恢复</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="mt-6 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-slate-500">
+            你可以先保存上方统一 Lark 应用配置；选择排班表后，再为该排班填写不同的 Lark 群 chat_id。
+          </div>
+        </section>
+
+        <section v-if="activeFeature === 'integrations' && !isAdmin" class="bg-white/80 glass rounded-2xl shadow-sm border border-white/60 p-6 text-sm text-slate-400">
+          当前账号为普通用户，仅管理员可访问接入配置。
+        </section>
+      </main>
+    </div>
+
+  <div v-if="showAddUserModal" class="fixed inset-0 bg-black/30 modal-backdrop flex items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 fade-in">
+      <h3 class="text-lg font-bold text-slate-800">添加人员</h3>
+      <input v-model="newUser.username" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="用户名（如 zhangsan）">
+      <input v-model="newUser.full_name" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="姓名">
+      <input v-model="newUser.email" type="email" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="邮箱">
+      <input v-model="newUser.phone" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="手机号（可选）">
+      <input v-model="newUser.password" type="password" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="密码">
+      <div class="flex justify-end gap-2 pt-2">
+        <button @click="showAddUserModal = false" class="px-4 py-2 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50">取消</button>
+        <button @click="addUser" class="px-4 py-2 bg-blue-500 text-white rounded-xl text-sm hover:bg-blue-600 shadow-sm shadow-blue-500/20">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="showAddScheduleModal" class="fixed inset-0 bg-black/30 modal-backdrop flex items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto fade-in">
+      <h3 class="text-lg font-bold text-slate-800">添加排班</h3>
+      <input v-model="newSchedule.name" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="排班名称">
+      <input v-model="newSchedule.description" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50" placeholder="支持组 / 描述">
+      <select v-model.number="newSchedule.owner_id" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50">
+        <option :value="null">选择负责人（必填）</option>
+        <option v-for="user in users" :key="`create-owner-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+      </select>
+      <input v-model="newSchedule.start_date" type="date" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50/50">
+      <div class="text-xs text-slate-400">结束日期默认无限期（持续排班）。</div>
+      <div>
+        <div class="text-sm text-slate-600 mb-2">排班组（每行主备）</div>
+        <div class="space-y-2">
+          <div v-for="(row, idx) in newScheduleGroups" :key="`create-group-${idx}`" class="grid grid-cols-12 gap-2">
+            <select v-model.number="row.primary" class="col-span-5 border rounded-lg px-3 py-2">
+              <option :value="null">主值班</option>
+              <option v-for="user in users" :key="`create-primary-${idx}-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+            </select>
+            <select v-model.number="row.secondary" class="col-span-5 border rounded-lg px-3 py-2">
+              <option :value="null">备值班</option>
+              <option v-for="user in users" :key="`create-secondary-${idx}-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+            </select>
+            <button @click="removeCreateGroupRow(idx)" class="col-span-2 border rounded-lg hover:bg-slate-50">删</button>
+          </div>
+          <button @click="addCreateGroupRow" class="px-3 py-2 rounded-lg border hover:bg-slate-50">+ 新增排班组</button>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button @click="showAddScheduleModal = false" class="px-4 py-2 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50">取消</button>
+        <button @click="addSchedule" class="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm hover:bg-emerald-600 shadow-sm shadow-emerald-500/20">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="showGroupModal" class="fixed inset-0 bg-black/30 modal-backdrop flex items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4 fade-in">
+      <h3 class="text-lg font-bold text-slate-800">编辑排班组</h3>
+      <div class="space-y-2 max-h-[55vh] overflow-y-auto">
+        <div v-for="(row, idx) in editingGroupRows" :key="`edit-group-${idx}`" class="grid grid-cols-12 gap-2">
+          <select v-model.number="row.primary" class="col-span-5 border rounded-lg px-3 py-2">
+            <option :value="null">主值班</option>
+            <option v-for="user in users" :key="`edit-primary-${idx}-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+          </select>
+          <select v-model.number="row.secondary" class="col-span-5 border rounded-lg px-3 py-2">
+            <option :value="null">备值班</option>
+            <option v-for="user in users" :key="`edit-secondary-${idx}-${user.id}`" :value="user.id">{{ user.full_name }}</option>
+          </select>
+          <button @click="removeGroupRow(idx)" class="col-span-2 border rounded-lg hover:bg-slate-50">删</button>
+        </div>
+      </div>
+      <div class="flex items-center justify-between">
+        <button @click="addGroupRow" class="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">+ 新增排班组</button>
+        <div class="space-x-2">
+          <button @click="showGroupModal = false" class="px-4 py-2 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50">取消</button>
+          <button @click="saveGroupRows" class="px-4 py-2 bg-blue-500 text-white rounded-xl text-sm hover:bg-blue-600 shadow-sm shadow-blue-500/20">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
